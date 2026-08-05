@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/juanfont/headscale/hscontrol/derp/proxyprotocol"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/rs/zerolog/log"
@@ -363,10 +364,10 @@ func (d *DERPServer) ServeSTUN() {
 		log.Fatal().Msg("stun listener is not a UDP listener")
 	}
 
-	serverSTUNListener(context.Background(), udpConn)
+	serverSTUNListener(context.Background(), udpConn, d.cfg.STUNProxyProtocolV2)
 }
 
-func serverSTUNListener(ctx context.Context, packetConn *net.UDPConn) {
+func serverSTUNListener(ctx context.Context, packetConn *net.UDPConn, proxyProtocolV2 bool) {
 	var buf [64 << 10]byte
 
 	for {
@@ -391,6 +392,26 @@ func serverSTUNListener(ctx context.Context, packetConn *net.UDPConn) {
 		log.Trace().Caller().Msgf("stun request from %v", udpAddr)
 
 		pkt := buf[:bytesRead]
+		mappedAddr, ok := netip.AddrFromSlice(udpAddr.IP)
+		if !ok {
+			log.Trace().Caller().Msgf("invalid UDP source address: %v", udpAddr)
+
+			continue
+		}
+		mappedAddrPort := netip.AddrPortFrom(mappedAddr.Unmap(), uint16(udpAddr.Port)) //nolint:gosec // port is always <=65535
+
+		if proxyProtocolV2 {
+			header, payload, err := proxyprotocol.ParseV2Datagram(pkt)
+			if err != nil {
+				log.Trace().Caller().Err(err).Msg("invalid UDP PROXY protocol v2 datagram")
+
+				continue
+			}
+
+			mappedAddrPort = header.Source
+			pkt = payload
+		}
+
 		if !stun.Is(pkt) {
 			log.Trace().Caller().Msgf("udp packet is not stun")
 
@@ -404,8 +425,7 @@ func serverSTUNListener(ctx context.Context, packetConn *net.UDPConn) {
 			continue
 		}
 
-		addr, _ := netip.AddrFromSlice(udpAddr.IP)
-		res := stun.Response(txid, netip.AddrPortFrom(addr, uint16(udpAddr.Port))) //nolint:gosec // port is always <=65535
+		res := stun.Response(txid, mappedAddrPort)
 
 		_, err = packetConn.WriteTo(res, udpAddr)
 		if err != nil {

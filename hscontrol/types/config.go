@@ -250,6 +250,7 @@ type DERPConfig struct {
 	ServerPrivateKeyPath               string
 	ServerVerifyClients                bool
 	STUNAddr                           string
+	STUNProxyProtocolV2                bool
 	URLs                               []url.URL
 	Paths                              []string
 	DERPMap                            *tailcfg.DERPMap
@@ -736,6 +737,7 @@ func derpConfig() DERPConfig {
 	serverRegionName := viper.GetString("derp.server.region_name")
 	serverVerifyClients := viper.GetBool("derp.server.verify_clients")
 	stunAddr := viper.GetString("derp.server.stun_listen_addr")
+	stunProxyProtocolV2 := viper.GetBool("derp.server.stun_proxy_protocol_v2")
 	privateKeyPath := util.AbsolutePathFromConfigPath(
 		viper.GetString("derp.server.private_key_path"),
 	)
@@ -786,6 +788,7 @@ func derpConfig() DERPConfig {
 		ServerVerifyClients:                serverVerifyClients,
 		ServerPrivateKeyPath:               privateKeyPath,
 		STUNAddr:                           stunAddr,
+		STUNProxyProtocolV2:                stunProxyProtocolV2,
 		URLs:                               urls,
 		Paths:                              paths,
 		AutoUpdate:                         autoUpdate,

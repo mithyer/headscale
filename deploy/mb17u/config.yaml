@@ -1,0 +1,82 @@
+server_url: https://ts.886996007.xyz:1234
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 0.0.0.0:9090
+trusted_proxies:
+  - 172.29.123.0/24
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: mb17u
+    region_name: mb17u Headscale DERP
+    verify_clients: true
+    # The advertised STUN port comes from this listener. Docker maps it to the
+    # normalizer's private upstream at host UDP 3478.
+    stun_listen_addr: 0.0.0.0:1235
+    stun_proxy_protocol_v2: true
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 3h
+
+disable_check_updates: true
+
+node:
+  expiry: 0
+  ephemeral:
+    inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  debug: false
+  gorm:
+    prepare_stmt: true
+    parameterized_queries: true
+    skip_err_record_not_found: true
+    slow_threshold: 1000
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+    wal_autocheckpoint: 1000
+
+tls_letsencrypt_hostname: ""
+tls_cert_path: ""
+tls_key_path: ""
+
+log:
+  level: info
+  format: text
+
+policy:
+  mode: file
+  path: ""
+
+dns:
+  magic_dns: true
+  base_domain: headnet.886996007.xyz
+  override_local_dns: false
+  nameservers:
+    global: []
+    split: {}
+  search_domains: []
+  extra_records: []
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: true

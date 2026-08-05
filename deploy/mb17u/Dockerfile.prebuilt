@@ -1,0 +1,19 @@
+FROM docker.io/nginx:1.28.0-alpine AS headscale
+
+RUN addgroup -g 65532 headscale \
+    && adduser -D -H -u 65532 -G headscale headscale \
+    && mkdir -p /var/lib/headscale /var/run/headscale \
+    && chown -R headscale:headscale /var/lib/headscale /var/run/headscale
+COPY headscale /usr/local/bin/headscale
+RUN chmod 0755 /usr/local/bin/headscale
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/headscale"]
+CMD ["serve"]
+
+FROM docker.io/fatedier/frpc:v0.70.1 AS frpc-normalizer
+
+COPY frp-stun-normalizer /usr/local/bin/frp-stun-normalizer
+COPY entrypoint.sh /usr/local/bin/frpc-normalizer-entrypoint
+RUN chmod 0755 /usr/local/bin/frp-stun-normalizer \
+    /usr/local/bin/frpc-normalizer-entrypoint
+ENTRYPOINT ["/usr/local/bin/frpc-normalizer-entrypoint"]

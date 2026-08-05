@@ -1,0 +1,135 @@
+name: mb17u-headscale
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  headscale:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.mb17u
+      target: headscale
+    image: mb17u/headscale:derp-proxy-v2
+    container_name: mb17u-headscale
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/run/headscale:size=1m,mode=0770,uid=65532,gid=65532
+    ports:
+      - "127.0.0.1:3478:1235/udp"
+    volumes:
+      - ./config.yaml:/etc/headscale/config.yaml:ro
+      - type: bind
+        source: ${HEADSCALE_DATA_DIR:-/opt/mb17u/headscale/data}
+        target: /var/lib/headscale
+        bind:
+          create_host_path: false
+    command: ["serve", "-c", "/etc/headscale/config.yaml"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/headscale", "health", "-c", "/etc/headscale/config.yaml"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      private:
+        ipv4_address: 172.29.123.2
+    logging: *default-logging
+
+  nginx:
+    image: docker.io/nginx:1.28.0-alpine
+    container_name: mb17u-headscale-nginx
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    ports:
+      - "127.0.0.1:1234:1234"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - type: bind
+        source: /etc/letsencrypt/live/ts.886996007.xyz
+        target: /etc/letsencrypt/live/ts.886996007.xyz
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/letsencrypt/archive/ts.886996007.xyz
+        target: /etc/letsencrypt/archive/ts.886996007.xyz
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      headscale:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      private:
+        ipv4_address: 172.29.123.3
+    logging: *default-logging
+
+  frpc-normalizer:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.mb17u
+      target: frpc-normalizer
+    image: mb17u/frpc-stun-normalizer:derp-proxy-v2
+    container_name: mb17u-frpc-normalizer
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - ${FRPC_CONFIG_PATH:-/opt/mb17u/frpc/frpc.toml}:/etc/frp/frpc.toml:ro
+    command:
+      - --listen
+      - 127.0.0.1:1235
+      - --upstream
+      - 127.0.0.1:3478
+      - --idle-timeout
+      - 1m
+      - --response-timeout
+      - 5s
+      - --max-sessions
+      - "4096"
+    depends_on:
+      headscale:
+        condition: service_healthy
+      nginx:
+        condition: service_healthy
+    logging: *default-logging
+
+networks:
+  private:
+    name: mb17u-headscale-private
+    ipam:
+      config:
+        - subnet: 172.29.123.0/24

@@ -1,0 +1,30 @@
+FROM docker.io/golang:1.26.5-alpine AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/headscale ./cmd/headscale \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/frp-stun-normalizer ./cmd/frp-stun-normalizer
+
+FROM docker.io/alpine:3.23 AS headscale
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -g 65532 headscale \
+    && adduser -D -H -u 65532 -G headscale headscale \
+    && mkdir -p /var/lib/headscale /var/run/headscale \
+    && chown -R headscale:headscale /var/lib/headscale /var/run/headscale
+COPY --from=builder /out/headscale /usr/local/bin/headscale
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/headscale"]
+CMD ["serve"]
+
+FROM docker.io/fatedier/frpc:v0.70.1 AS frpc
+
+FROM docker.io/alpine:3.23 AS frpc-normalizer
+
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /out/frp-stun-normalizer /usr/local/bin/frp-stun-normalizer
+COPY --from=frpc /usr/bin/frpc /usr/local/bin/frpc
+COPY cmd/frp-stun-normalizer/entrypoint.sh /usr/local/bin/frpc-normalizer-entrypoint
+ENTRYPOINT ["/usr/local/bin/frpc-normalizer-entrypoint"]
