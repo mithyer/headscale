@@ -2,6 +2,9 @@
 # go.mod 需要 1.27.0；Docker Hub 无 1.27.0-alpine tag，使用最近的 1.27.1-alpine
 FROM docker.io/golang:1.27.1-alpine AS builder
 
+# 构建容器走默认桥接网络直连出口，proxy.golang.org 不可达，必须用国内 Go 模块代理
+ENV GOPROXY=https://goproxy.cn,direct
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
