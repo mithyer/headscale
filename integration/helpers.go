@@ -323,7 +323,7 @@ func requireAllClientsOnlineWithSingleTimeout(t *testing.T, headscale ControlSer
 			if node, exists := nodeStore[nodeID]; exists {
 				if status, exists := nodeStatus[nodeID]; exists {
 					// Check if node is online in nodestore
-					status.NodeStore = node.IsOnline != nil && *node.IsOnline
+					status.NodeStore = node.Online()
 					nodeStatus[nodeID] = status
 				}
 			}
@@ -415,11 +415,10 @@ func requireAllClientsOfflineStaged(t *testing.T, headscale ControlServer, expec
 
 		for _, nodeID := range expectedNodes {
 			if node, exists := nodeStore[nodeID]; exists {
-				isOnline := node.IsOnline != nil && *node.IsOnline
-				if isOnline {
+				if node.Online() {
 					allNodeStoreOffline = false
 
-					assert.False(c, isOnline, "Node %d should be offline in nodestore", nodeID)
+					assert.False(c, node.Online(), "Node %d should be offline in nodestore", nodeID)
 				}
 			}
 		}
@@ -735,17 +734,11 @@ func assertClientsState(t *testing.T, clients []TailscaleClient) {
 	var wg sync.WaitGroup
 
 	for _, client := range clients {
-		wg.Add(1)
-
-		c := client // Avoid loop pointer
-
-		go func() {
-			defer wg.Done()
-
-			assertValidStatus(t, c)
-			assertValidNetcheck(t, c)
-			assertValidNetmap(t, c)
-		}()
+		wg.Go(func() {
+			assertValidStatus(t, client)
+			assertValidNetcheck(t, client)
+			assertValidNetmap(t, client)
+		})
 	}
 
 	t.Logf("waiting for client state checks to finish")

@@ -1,10 +1,14 @@
 package derp
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/require"
 	"tailscale.com/tailcfg"
 )
 
@@ -19,7 +23,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 			name:       "single region with 4 nodes",
 			baseDomain: "test1.example.com",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					1: {
 						RegionID:   1,
 						RegionCode: "nyc",
@@ -34,7 +38,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 				},
 			},
 			expected: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					1: {
 						RegionID:   1,
 						RegionCode: "nyc",
@@ -53,7 +57,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 			name:       "multiple regions with nodes",
 			baseDomain: "test2.example.com",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					10: {
 						RegionID:   10,
 						RegionCode: "sea",
@@ -77,7 +81,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 				},
 			},
 			expected: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					10: {
 						RegionID:   10,
 						RegionCode: "sea",
@@ -105,7 +109,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 			name:       "large region with many nodes",
 			baseDomain: "test3.example.com",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -120,7 +124,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 				},
 			},
 			expected: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -139,7 +143,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 			name:       "same region different base domain",
 			baseDomain: "different.example.com",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -154,7 +158,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 				},
 			},
 			expected: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -173,7 +177,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 			name:       "same dataset with another base domain",
 			baseDomain: "another.example.com",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -188,7 +192,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 				},
 			},
 			expected: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -207,7 +211,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 			name:       "same dataset with yet another base domain",
 			baseDomain: "yetanother.example.com",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -222,7 +226,7 @@ func TestShuffleDERPMapDeterministic(t *testing.T) {
 				},
 			},
 			expected: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					4: {
 						RegionID:   4,
 						RegionCode: "fra",
@@ -269,13 +273,13 @@ func TestShuffleDERPMapEdgeCases(t *testing.T) {
 		{
 			name: "empty derp map",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{},
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{},
 			},
 		},
 		{
 			name: "region with no nodes",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					1: {
 						RegionID:   1,
 						RegionCode: "empty",
@@ -288,7 +292,7 @@ func TestShuffleDERPMapEdgeCases(t *testing.T) {
 		{
 			name: "region with single node",
 			derpMap: &tailcfg.DERPMap{
-				Regions: map[int]*tailcfg.DERPRegion{
+				Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 					1: {
 						RegionID:   1,
 						RegionCode: "single",
@@ -314,7 +318,7 @@ func TestShuffleDERPMapWithoutBaseDomain(t *testing.T) {
 	resetDerpRandomForTesting()
 
 	derpMap := &tailcfg.DERPMap{
-		Regions: map[int]*tailcfg.DERPRegion{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 			1: {
 				RegionID:   1,
 				RegionCode: "test",
@@ -348,5 +352,76 @@ func TestShuffleDERPMapWithoutBaseDomain(t *testing.T) {
 
 	if diff := cmp.Diff(originalNodes, shuffledNodes); diff != "" {
 		t.Errorf("Shuffle changed node set (-original +shuffled):\n%s", diff)
+	}
+}
+
+// TestLoadDERPMapFromPath covers each file format and the silent-empty trap:
+// keys the decoder doesn't know decode to nothing.
+func TestLoadDERPMapFromPath(t *testing.T) {
+	want := &tailcfg.DERPMap{
+		Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
+			999: {
+				RegionID:   999,
+				RegionCode: "test",
+				Nodes: []*tailcfg.DERPNode{
+					{Name: "999a", RegionID: 999, HostName: "derp.test", DERPPort: 443, InsecureForTests: true},
+				},
+			},
+		},
+	}
+
+	tailcfgJSON, err := json.Marshal(want)
+	require.NoError(t, err)
+
+	yamlMap := `regions:
+  999:
+    regionid: 999
+    regioncode: test
+    nodes:
+      - name: 999a
+        regionid: 999
+        hostname: derp.test
+        derpport: 443
+        insecurefortests: true
+`
+
+	tests := []struct {
+		name    string
+		file    string
+		content string
+		wantErr bool
+	}{
+		{name: "yaml", file: "derp.yaml", content: yamlMap},
+		{name: "yml", file: "derp.yml", content: yamlMap},
+		{
+			name:    "flow-style yaml",
+			file:    "derp.yaml",
+			content: "{regions: {999: {regionid: 999, regioncode: test, nodes: [{name: 999a, regionid: 999, hostname: derp.test, derpport: 443, insecurefortests: true}]}}}",
+		},
+		{name: "tailcfg json", file: "derp.json", content: string(tailcfgJSON)},
+		{name: "tailcfg hujson", file: "derp.hujson", content: "// test map\n" + string(tailcfgJSON)},
+		{name: "json as yaml decodes to nothing", file: "derp.yaml", content: string(tailcfgJSON), wantErr: true},
+		{name: "empty", file: "derp.yaml", content: "", wantErr: true},
+		{name: "no extension", file: "derp", content: yamlMap, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.file)
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+
+			got, err := loadDERPMapFromPath(path)
+			if tt.wantErr {
+				require.Error(t, err)
+
+				return
+			}
+
+			require.NoError(t, err)
+
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("loadDERPMapFromPath() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

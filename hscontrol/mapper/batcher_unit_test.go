@@ -428,6 +428,59 @@ func TestMultiChannelClose_PreventsSendPanic(t *testing.T) {
 		"send after close should return errConnectionClosed, not panic")
 }
 
+func TestAddToBatch_NodeRemovedStopsSession(t *testing.T) {
+	lb := setupLightweightBatcher(t, 1, 1)
+	defer lb.cleanup()
+
+	mc, ok := lb.b.nodes.Load(1)
+	require.True(t, ok)
+
+	stopped := make(chan struct{})
+
+	mc.mutex.Lock()
+	mc.connections[0].stop = func() { close(stopped) }
+	mc.mutex.Unlock()
+
+	lb.b.AddWork(change.NodeRemoved(1))
+
+	// addToBatch runs synchronously, so the session must already be stopped.
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("deleting a node must stop its map session, otherwise the long poll is orphaned")
+	}
+
+	_, stillTracked := lb.b.nodes.Load(1)
+	assert.False(t, stillTracked, "deleted node should no longer be tracked by the batcher")
+	assert.Equal(t, int64(0), lb.b.totalNodes.Load())
+}
+
+func TestAddToBatch_PeersRemovedKeepsSession(t *testing.T) {
+	lb := setupLightweightBatcher(t, 1, 1)
+	defer lb.cleanup()
+
+	mc, ok := lb.b.nodes.Load(1)
+	require.True(t, ok)
+
+	stopped := make(chan struct{})
+
+	mc.mutex.Lock()
+	mc.connections[0].stop = func() { close(stopped) }
+	mc.mutex.Unlock()
+
+	lb.b.AddWork(change.PeersRemoved(1))
+
+	select {
+	case <-stopped:
+		t.Fatal("a peer visibility delta must not stop the peer's own map session")
+	default:
+	}
+
+	_, stillTracked := lb.b.nodes.Load(1)
+	assert.True(t, stillTracked, "a visible peer removal must remain tracked by the batcher")
+	assert.Equal(t, int64(1), lb.b.totalNodes.Load())
+}
+
 // ============================================================================
 // multiChannelNodeConn connection management Tests
 // ============================================================================
@@ -950,51 +1003,8 @@ func TestMultiChannelSend_ConcurrentRemoveAndSend(t *testing.T) {
 }
 
 // ============================================================================
-// Regression tests for H1 (timer leak) and H3 (lifecycle)
+// Regression test for H3 (lifecycle)
 // ============================================================================
-
-// TestConnectionEntry_SendFastPath_TimerStopped is a regression guard for H1.
-// Before the fix, connectionEntry.send used time.After(50ms) which leaked a
-// timer into the runtime heap on every call even when the channel send
-// succeeded immediately. The fix switched to time.NewTimer + defer Stop().
-//
-// This test sends many messages on a buffered (non-blocking) channel and
-// checks that the number of live goroutines stays bounded, which would
-// grow without bound under the old time.After approach at high call rates.
-func TestConnectionEntry_SendFastPath_TimerStopped(t *testing.T) {
-	const sends = 5000
-
-	ch := make(chan *tailcfg.MapResponse, sends)
-
-	entry := &connectionEntry{
-		id:      "timer-leak-test",
-		c:       ch,
-		version: 100,
-		created: time.Now(),
-	}
-
-	resp := testMapResponse()
-
-	for range sends {
-		err := entry.send(resp)
-		require.NoError(t, err)
-	}
-
-	// Drain the channel so we aren't holding references.
-	for range sends {
-		<-ch
-	}
-
-	// Force a GC + timer cleanup pass.
-	runtime.GC()
-
-	// If timers were leaking we'd see a goroutine count much higher
-	// than baseline. With 5000 leaked timers the count would be
-	// noticeably elevated. We just check it's reasonable.
-	numGR := runtime.NumGoroutine()
-	assert.Less(t, numGR, 200,
-		"goroutine count after %d fast-path sends should be bounded; got %d (possible timer leak)", sends, numGR)
-}
 
 // TestBatcher_CloseWaitsForWorkers is a regression guard for H3.
 // Before the fix, Close() would tear down node connections while workers

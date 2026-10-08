@@ -8,7 +8,6 @@ import (
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // sshTestUsers/sshTestNodes are reused across the table below to keep
@@ -22,9 +21,9 @@ import (
 //   - prod   (alice-created tagged node) → tag:prod
 func sshTestUsers() types.Users {
 	return types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "alice", Email: "alice@headscale.net"},
-		{Model: gorm.Model{ID: 2}, Name: "bob", Email: "bob@headscale.net"},
-		{Model: gorm.Model{ID: 3}, Name: "thor", Email: "thor@example.org"},
+		{ID: 1, Name: "alice", Email: "alice@headscale.net"},
+		{ID: 2, Name: "bob", Email: "bob@headscale.net"},
+		{ID: 3, Name: "thor", Email: "thor@example.org"},
 	}
 }
 
@@ -130,6 +129,46 @@ func TestRunSSHTests(t *testing.T) {
 					"src":    "alice@headscale.net",
 					"dst":    ["tag:server"],
 					"accept": ["root", "ubuntu"]
+				}]
+			}`,
+			wantPass: true,
+		},
+		{
+			// Rules tolerate unregistered users; a test naming one fails.
+			name: "unknown-src-user",
+			policy: `{
+				"tagOwners": { "tag:server": ["alice@headscale.net"] },
+				"ssh": [{
+					"action": "accept",
+					"src":    ["alice@headscale.net"],
+					"dst":    ["tag:server"],
+					"users":  ["root"]
+				}],
+				"sshTests": [{
+					"src":    "ghost@headscale.net",
+					"dst":    ["tag:server"],
+					"accept": ["root"]
+				}]
+			}`,
+			wantPass:   false,
+			wantErrSub: []string{"ghost@headscale.net", "failed to resolve source"},
+		},
+		{
+			// A group tolerates unregistered members like any rule (#3513).
+			name: "group-src-with-unregistered-member",
+			policy: `{
+				"groups": {"group:eng": ["alice@headscale.net", "ghost@headscale.net"]},
+				"tagOwners": { "tag:server": ["alice@headscale.net"] },
+				"ssh": [{
+					"action": "accept",
+					"src":    ["group:eng"],
+					"dst":    ["tag:server"],
+					"users":  ["root"]
+				}],
+				"sshTests": [{
+					"src":    "group:eng",
+					"dst":    ["tag:server"],
+					"accept": ["root"]
 				}]
 			}`,
 			wantPass: true,

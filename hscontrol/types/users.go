@@ -40,7 +40,7 @@ const (
 // Tagged nodes don't belong to a real user - the tag is their identity.
 // This special user ID is used when rendering tagged nodes in the Tailscale protocol.
 var TaggedDevices = User{
-	Model:       gorm.Model{ID: TaggedDevicesUserID},
+	ID:          TaggedDevicesUserID,
 	Name:        "tagged-devices",
 	DisplayName: "Tagged Devices",
 }
@@ -103,6 +103,16 @@ func (u *User) StringID() string {
 	}
 
 	return strconv.FormatUint(uint64(u.ID), 10)
+}
+
+// PolicyEqual reports whether the policy would resolve both users the same
+// way: the same row, and the same name, email, and provider identity that
+// user aliases match on.
+func (u *User) PolicyEqual(o *User) bool {
+	return u.ID == o.ID &&
+		u.Name == o.Name &&
+		u.Email == o.Email &&
+		u.ProviderIdentifier == o.ProviderIdentifier
 }
 
 // TypedID returns a pointer to the user's ID as a [UserID] type.

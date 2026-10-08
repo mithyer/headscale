@@ -50,6 +50,25 @@ type connectionEntry struct {
 	// can never become the stream's first frame ahead of the initial
 	// map. The zero value means the connection is ready.
 	pendingInitial atomic.Bool
+
+	// lastSelf is the self node last delivered to this connection's
+	// client, which keeps it until sent another. Every send to an
+	// established connection must go through [multiChannelNodeConn.send]
+	// to keep it current.
+	lastSelf atomic.Pointer[tailcfg.Node]
+}
+
+// withSelfDelta returns data without its Node when this client already
+// holds an equal one: a Node forces a full client netmap rebuild.
+func (entry *connectionEntry) withSelfDelta(data *tailcfg.MapResponse) *tailcfg.MapResponse {
+	if data.Node == nil || !data.Node.Equal(entry.lastSelf.Load()) {
+		return data
+	}
+
+	stripped := *data
+	stripped.Node = nil
+
+	return &stripped
 }
 
 // multiChannelNodeConn manages multiple concurrent connections for a single node.
@@ -262,6 +281,14 @@ func (mc *multiChannelNodeConn) prependPending(changes ...change.Change) {
 	mc.pendingMu.Unlock()
 }
 
+// collapsePendingToFull replaces pending, together with incoming, by a
+// single full update and the pings it cannot carry ([change.CollapseToFull]).
+func (mc *multiChannelNodeConn) collapsePendingToFull(incoming []change.Change) {
+	mc.pendingMu.Lock()
+	mc.pending = change.CollapseToFull(mc.id, slices.Concat(mc.pending, incoming))
+	mc.pendingMu.Unlock()
+}
+
 // drainPending atomically removes and returns all pending changes.
 // Returns nil if there are no pending changes.
 func (mc *multiChannelNodeConn) drainPending() []change.Change {
@@ -333,7 +360,7 @@ func (mc *multiChannelNodeConn) send(data *tailcfg.MapResponse) error {
 	)
 
 	for _, conn := range snapshot {
-		err := conn.send(data)
+		err := conn.send(conn.withSelfDelta(data))
 		if err != nil {
 			lastErr = err
 
@@ -344,6 +371,10 @@ func (mc *multiChannelNodeConn) send(data *tailcfg.MapResponse) error {
 				Msg("send: connection failed")
 		} else {
 			successCount++
+
+			if data.Node != nil {
+				conn.lastSelf.Store(data.Node)
+			}
 		}
 	}
 
@@ -403,10 +434,8 @@ func (entry *connectionEntry) send(data *tailcfg.MapResponse) error {
 	// This is critical for detecting Docker containers that are forcefully terminated
 	// but still have channels that appear open.
 	//
-	// We use time.NewTimer + Stop instead of time.After to avoid leaking timers.
-	// time.After creates a timer that lives in the runtime's timer heap until it fires,
-	// even when the send succeeds immediately. On the hot path (1000+ nodes per tick),
-	// this leaks thousands of timers per second.
+	// Use a timer rather than time.After so the timeout is explicitly released
+	// on the fast path; both are GC-recoverable since Go 1.23.
 	timer := time.NewTimer(50 * time.Millisecond) //nolint:mnd
 	defer timer.Stop()
 

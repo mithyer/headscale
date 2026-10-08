@@ -5,7 +5,6 @@ import (
 
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/gorm"
 )
 
 // TestNodeIsTagged tests the [Node.IsTagged] method for determining if a node is tagged.
@@ -49,7 +48,7 @@ func TestNodeIsTagged(t *testing.T) {
 			// [Node.IsTagged] only checks [Node.Tags], not [PreAuthKey.Tags].
 			name: "node registered with tagged authkey only - not tagged (tags should be copied)",
 			node: Node{
-				AuthKey: &PreAuthKey{
+				AuthKey: &Credential{
 					Tags: []string{"tag:database"},
 				},
 			},
@@ -59,7 +58,7 @@ func TestNodeIsTagged(t *testing.T) {
 			name: "node with both tags and authkey tags - is tagged",
 			node: Node{
 				Tags: []string{"tag:server"},
-				AuthKey: &PreAuthKey{
+				AuthKey: &Credential{
 					Tags: []string{"tag:database"},
 				},
 			},
@@ -102,7 +101,7 @@ func TestNodeViewIsTagged(t *testing.T) {
 			// with only [PreAuthKey.Tags] and no [Node.Tags] would be invalid in practice.
 			name: "node with only AuthKey tags - not tagged (tags should be copied)",
 			node: Node{
-				AuthKey: &PreAuthKey{
+				AuthKey: &Credential{
 					Tags: []string{"tag:web"},
 				},
 			},
@@ -155,7 +154,7 @@ func TestNodeHasTag(t *testing.T) {
 			// [Node.HasTag] only checks [Node.Tags], not [PreAuthKey.Tags]
 			name: "node has tag only in authkey - returns false",
 			node: Node{
-				AuthKey: &PreAuthKey{
+				AuthKey: &Credential{
 					Tags: []string{"tag:database"},
 				},
 			},
@@ -167,7 +166,7 @@ func TestNodeHasTag(t *testing.T) {
 			name: "node has tag in Tags but not in AuthKey",
 			node: Node{
 				Tags: []string{"tag:server"},
-				AuthKey: &PreAuthKey{
+				AuthKey: &Credential{
 					Tags: []string{"tag:database"},
 				},
 			},
@@ -206,7 +205,7 @@ func TestNodeTagsImmutableAfterRegistration(t *testing.T) {
 	taggedNode := Node{
 		ID:   1,
 		Tags: []string{"tag:server"},
-		AuthKey: &PreAuthKey{
+		AuthKey: &Credential{
 			Tags: []string{"tag:server"},
 		},
 		RegisterMethod: util.RegisterMethodAuthKey,
@@ -265,7 +264,7 @@ func TestNodeOwnershipModel(t *testing.T) {
 			node: Node{
 				ID:     3,
 				UserID: new(uint(5)), // "created by" user 5
-				AuthKey: &PreAuthKey{
+				AuthKey: &Credential{
 					Tags: []string{"tag:database"},
 				},
 			},
@@ -285,7 +284,7 @@ func TestNodeOwnershipModel(t *testing.T) {
 // TestUserTypedID tests the TypedID() helper method.
 func TestUserTypedID(t *testing.T) {
 	user := User{
-		Model: gorm.Model{ID: 42},
+		ID: 42,
 	}
 
 	typedID := user.TypedID()

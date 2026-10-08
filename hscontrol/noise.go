@@ -150,7 +150,7 @@ func (h *Headscale) NoiseUpgradeHandler(
 		Host:  false,
 		Proto: true,
 		Skip: func(r *http.Request) bool {
-			return r.Method != http.MethodOptions
+			return r.Method == http.MethodOptions
 		},
 	}))
 	r.Use(middleware.RequestID)
@@ -463,7 +463,8 @@ func (ns *noiseServer) SSHActionHandler(
 //  2. Initial request, needs auth — build a [tailcfg.SSHAction.HoldAndDelegate] URL and
 //     wait for the user to authenticate.
 //  3. Follow-up request — an auth_id is present, wait for the auth
-//     verdict and accept or reject.
+//     verdict and accept or reject. A session that is gone or whose
+//     verdict another follow-up consumed is re-decided.
 func (ns *noiseServer) sshAction(
 	ctx context.Context,
 	reqLog zerolog.Logger,
@@ -592,15 +593,15 @@ func (ns *noiseServer) sshActionFollowUp(
 
 	reqLog = reqLog.With().Str("auth_id", authID.String()).Logger()
 
-	auth, ok := ns.headscale.state.GetAuthCacheEntry(authID)
-	if !ok {
-		// The session is gone (expired, evicted, or lost on a control-plane
-		// restart). A bare error dead-ends the client: it keeps polling this
-		// now-defunct auth_id until the SSH connection times out. Re-delegate
-		// so a still-required check can complete instead.
+	// The session is gone (expired, evicted, or lost on a control-plane
+	// restart) or its verdict was already consumed. A bare error dead-ends
+	// the client: it keeps polling this now-defunct auth_id until the SSH
+	// connection times out. Re-delegate so a still-required check can
+	// complete instead.
+	sessionGone := func(logMsg string) (*tailcfg.SSHAction, error) {
 		if checkFound {
 			reqLog.Info().Caller().
-				Msg("SSH check auth session missing; re-delegating")
+				Msg(logMsg)
 
 			return ns.sshActionHoldAndDelegate(
 				reqLog, action, srcNodeID, dstNodeID,
@@ -612,6 +613,11 @@ func (ns *noiseServer) sshActionFollowUp(
 			"Invalid auth_id",
 			fmt.Errorf("%w: %s", ErrNoAuthSession, authID),
 		)
+	}
+
+	auth, ok := ns.headscale.state.GetAuthCacheEntry(authID)
+	if !ok {
+		return sessionGone("SSH check auth session missing; re-delegating")
 	}
 
 	// Verify the cached binding matches the (src, dst) pair the
@@ -642,7 +648,11 @@ func (ns *noiseServer) sshActionFollowUp(
 
 	reqLog.Trace().Caller().Msg("SSH action follow-up")
 
-	var verdict types.AuthVerdict
+	var (
+		verdict   types.AuthVerdict
+		verdictOK bool
+	)
+
 	select {
 	case <-ctx.Done():
 		// The client disconnected (or its request timed out) before the
@@ -655,7 +665,14 @@ func (ns *noiseServer) sshActionFollowUp(
 			"ssh action follow-up cancelled",
 			ctx.Err(),
 		)
-	case verdict = <-auth.WaitForAuth():
+	case verdict, verdictOK = <-auth.WaitForAuth():
+	}
+
+	// FinishAuth buffers one verdict, then closes the channel. A closed
+	// receive yields the zero verdict, which Accept() reports as success,
+	// so a replayed follow-up would be approved even after a Reject.
+	if !verdictOK {
+		return sessionGone("SSH check verdict already consumed; re-delegating")
 	}
 
 	if !verdict.Accept() {
@@ -708,7 +725,37 @@ func (ns *noiseServer) PollNetMapHandler(
 
 	nv, err := ns.getAndValidateNode(mapRequest)
 	if err != nil {
+		// The node is gone, but the client does not know that. Tailscale
+		// clients treat every non-200 on the map path the same way and retry
+		// forever with loggedIn still set; only a self node whose KeyExpiry is
+		// in the past drives them to NeedsLogin. There is no MapResponse field
+		// that says "deleted", so reuse the expiry signal headscale already
+		// sends for expired nodes.
+		// See: https://github.com/juanfont/headscale/issues/3410
+		if errors.Is(err, errNodeNotInStore) && mapRequest.Stream {
+			expired := &tailcfg.MapResponse{
+				Node: &tailcfg.Node{
+					Key: mapRequest.NodeKey,
+					// Zero means that the key does not expire. Use a fixed,
+					// ancient non-zero value so this remains expired even when
+					// the client's clock is substantially behind the server.
+					KeyExpiry: time.Unix(1, 0).UTC(),
+					Expired:   true,
+				},
+				// This frame opens the stream in place of the initial map.
+				Debug: ns.headscale.cfg.TailcfgDebug(),
+			}
+
+			err = writeMapResponse(writer, mapRequest.Compress, true, expired)
+			if err != nil {
+				log.Error().Caller().Err(err).Msg("noise map handler: failed to write expired response for deleted node")
+			}
+
+			return
+		}
+
 		httpError(writer, err)
+
 		return
 	}
 
@@ -737,36 +784,35 @@ func (ns *noiseServer) RegistrationHandler(
 		return
 	}
 
-	registerRequest, registerResponse := func() (*tailcfg.RegisterRequest, *tailcfg.RegisterResponse) { //nolint:contextcheck
-		var resp *tailcfg.RegisterResponse
+	var registerRequest tailcfg.RegisterRequest
 
-		var regReq tailcfg.RegisterRequest
+	decodeErr := json.NewDecoder(req.Body).Decode(&registerRequest)
 
-		err := json.NewDecoder(req.Body).Decode(&regReq)
-		if err != nil {
-			return &regReq, regErr(err)
-		}
-
-		resp, err = ns.headscale.handleRegister(req.Context(), regReq, ns.conn.Peer())
-		if err != nil {
-			if httpErr, ok := errors.AsType[HTTPError](err); ok {
-				resp = &tailcfg.RegisterResponse{
-					Error: httpErr.Msg,
-				}
-
-				return &regReq, resp
-			}
-
-			return &regReq, regErr(err)
-		}
-
-		return &regReq, resp
-	}()
-
-	// Reject unsupported versions
+	// The floor must be enforced before handleRegister: a logout, pre-auth
+	// key use or auth-cache write it performs is not undone by a later 400.
+	// A failed decode still gets checked against whatever Version it read.
 	if rejectUnsupported(writer, registerRequest.Version, ns.machineKey, registerRequest.NodeKey) {
 		return
 	}
+
+	registerResponse := func() *tailcfg.RegisterResponse { //nolint:contextcheck
+		if decodeErr != nil {
+			return regErr(decodeErr)
+		}
+
+		resp, err := ns.headscale.handleRegister(req.Context(), registerRequest, ns.machineKey)
+		if err != nil {
+			if httpErr, ok := errors.AsType[HTTPError](err); ok {
+				return &tailcfg.RegisterResponse{
+					Error: httpErr.Msg,
+				}
+			}
+
+			return regErr(err)
+		}
+
+		return resp
+	}()
 
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
@@ -783,12 +829,17 @@ func (ns *noiseServer) RegistrationHandler(
 	}
 }
 
-// getAndValidateNode retrieves the node from the database using the NodeKey
-// and validates that it matches the MachineKey from the Noise session.
+// errNodeNotInStore distinguishes an unknown NodeKey from a NodeKey presented
+// by the wrong machine key. Both are answered with 404, but only the former
+// means the node is gone and its client should re-authenticate.
+var errNodeNotInStore = errors.New("node not found")
+
+// getAndValidateNode retrieves the node from the in-memory NodeStore using the
+// NodeKey and validates that it matches the MachineKey from the Noise session.
 func (ns *noiseServer) getAndValidateNode(mapRequest tailcfg.MapRequest) (types.NodeView, error) {
 	nv, ok := ns.headscale.state.GetNodeByNodeKey(mapRequest.NodeKey)
 	if !ok {
-		return types.NodeView{}, NewHTTPError(http.StatusNotFound, "node not found", nil)
+		return types.NodeView{}, NewHTTPError(http.StatusNotFound, "node not found", errNodeNotInStore)
 	}
 
 	// Validate that the MachineKey in the Noise session matches the one associated with the NodeKey.

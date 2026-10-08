@@ -29,7 +29,6 @@ import (
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/types/testcapture"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 	"tailscale.com/tailcfg"
 )
 
@@ -39,9 +38,9 @@ import (
 // .
 func setupGrantsCompatUsers() types.Users {
 	return types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "odin", Email: "odin@example.com"},
-		{Model: gorm.Model{ID: 2}, Name: "thor", Email: "thor@example.org"},
-		{Model: gorm.Model{ID: 3}, Name: "freya", Email: "freya@example.com"},
+		{ID: 1, Name: "odin", Email: "odin@example.com"},
+		{ID: 2, Name: "thor", Email: "thor@example.org"},
+		{ID: 3, Name: "freya", Email: "freya@example.com"},
 	}
 }
 
@@ -153,6 +152,22 @@ var grantSkipReasons = map[string]string{
 	// authentication and has no equivalent for this wildcard pattern.
 	"grant-k20": "USER_PASSKEY_WILDCARD: src=user:*@passkey not supported in headscale",
 	"grant-k21": "USER_PASSKEY_WILDCARD: dst=user:*@passkey not supported in headscale",
+
+	// SaaS lists contiguous source addresses one by one and writes
+	// autogroup:internet as address ranges; headscale merges sources into
+	// ranges and writes the internet as prefixes. The address sets match;
+	// TestViaGrantMapCompat compares these captures' filters by address.
+	"via-grant-v52": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v53": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v54": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v55": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v56": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v57": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v58": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v59": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v60": "FILTER_ADDRESS_FORM: same addresses, different wire form and rule order",
+	"via-grant-v61": "FILTER_ADDRESS_FORM: same addresses, different wire form",
+	"via-grant-v62": "FILTER_ADDRESS_FORM: same addresses, different wire form",
 }
 
 // TestGrantsCompat is a data-driven test that loads all GRANT-*.json
@@ -168,7 +183,7 @@ var grantSkipReasons = map[string]string{
 // (@example.com, @example.org) and runs the policy through unmarshalPolicy,
 // validate, compileFilterRulesForNode, and ReduceFilterRules.
 //
-// 2 tests are skipped for user:*@passkey wildcard (not supported in headscale).
+// Scenarios in grantSkipReasons are skipped.
 func TestGrantsCompat(t *testing.T) {
 	t.Parallel()
 

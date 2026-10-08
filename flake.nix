@@ -2,13 +2,7 @@
   description = "headscale - Open Source Tailscale Control server";
 
   inputs = {
-    # Pinned to staging-next-26.05 for Go 1.26.5: the Tailscale HEAD build
-    # (Dockerfile.tailscale-HEAD) requires go >= 1.26.5, and nixpkgs-unstable
-    # still ships 1.26.4 — the bump is merged to nixpkgs staging but the
-    # large-rebuild staging->unstable pipeline lags. The 26.05 line is otherwise
-    # current (dev tools match unstable). Switch back to nixpkgs-unstable once it
-    # ships go_1_26 >= 1.26.5.
-    nixpkgs.url = "github:NixOS/nixpkgs/staging-next-26.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     # Reusable Go flake checks (build/test/lint/format); CI runs them via
     # `nix build .#checks.<system>.<name>` instead of bespoke per-tool steps.
@@ -17,11 +11,12 @@
   };
 
   outputs =
-    { self
-    , nixpkgs
-    , flake-utils
-    , flake-checks
-    , ...
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      flake-checks,
+      ...
     }:
     let
       headscaleVersion = self.shortRev or self.dirtyShortRev;
@@ -30,15 +25,22 @@
     {
       # NixOS module
       nixosModules = rec {
-        headscale = import ./nix/module.nix;
+        # A path, so importing it twice (directly and via testkit) dedupes.
+        headscale = ./nix/module.nix;
         default = headscale;
+        # Control node for NixOS VM tests of Tailscale clients, and a peer
+        # that joins it; nix/README.md.
+        testkit = import ./nix/testkit.nix self;
+        testkit-peer = ./nix/testkit-peer.nix;
       };
 
-      overlays.default = _: prev:
+      overlays.default =
+        _: prev:
         let
           pkgs = nixpkgs.legacyPackages.${prev.stdenv.hostPlatform.system};
-          # Go 1.26 builder; resolves to Go 1.26.5 from the pinned nixpkgs.
-          buildGo = pkgs.buildGo126Module;
+          # Tracks the newest Go in nixpkgs so a Go release bump is a
+          # flake.lock update, not a flake.nix edit.
+          buildGo = pkgs.buildGoLatestModule;
           vendorHash = (builtins.fromJSON (builtins.readFile ./flakehashes.json)).vendor.sri;
         in
         {
@@ -72,48 +74,6 @@
             subPackages = [ "cmd/hi" ];
           };
 
-          # Build golangci-lint with stock Go 1.26 (upstream uses hardcoded Go
-          # version); it does not build against the pinned 1.26.5.
-          golangci-lint = buildGo rec {
-            pname = "golangci-lint";
-            version = "2.12.2";
-
-            src = pkgs.fetchFromGitHub {
-              owner = "golangci";
-              repo = "golangci-lint";
-              rev = "v${version}";
-              hash = "sha256-qR7fp1x2S+EwEAcplRHTvA3jWwLr/XSiYKSZtAwkrNU=";
-            };
-
-            vendorHash = "sha256-AG5wtLwWLz55bdp1oi3cW+9O3yj1W1P7MV9zxym7Pb4=";
-
-            subPackages = [ "cmd/golangci-lint" ];
-
-            nativeBuildInputs = [ pkgs.installShellFiles ];
-
-            ldflags = [
-              "-s"
-              "-w"
-              "-X main.version=${version}"
-              "-X main.commit=v${version}"
-              "-X main.date=1970-01-01T00:00:00Z"
-            ];
-
-            postInstall = ''
-              for shell in bash zsh fish; do
-                HOME=$TMPDIR $out/bin/golangci-lint completion $shell > golangci-lint.$shell
-                installShellCompletion golangci-lint.$shell
-              done
-            '';
-
-            meta = {
-              description = "Fast linters runner for Go";
-              homepage = "https://golangci-lint.run/";
-              changelog = "https://github.com/golangci/golangci-lint/blob/v${version}/CHANGELOG.md";
-              mainProgram = "golangci-lint";
-            };
-          };
-
           gotestsum = prev.gotestsum.override {
             buildGoModule = buildGo;
           };
@@ -126,33 +86,55 @@
             buildGoModule = buildGo;
           };
 
-          gopls = prev.gopls.override {
-            buildGoLatestModule = buildGo;
+          golines = prev.golines.override {
+            buildGoModule = buildGo;
+          };
+
+          # goimports and friends: they parse Go with the parser of the Go
+          # they were built with, so an older one rejects new syntax.
+          gotools = prev.gotools.override {
+            buildGoModule = buildGo;
+            # goimports is wrapped with this go on PATH for module lookups.
+            go = pkgs.go_latest;
+          };
+
+          golangci-lint-langserver = prev.golangci-lint-langserver.override {
+            buildGoModule = buildGo;
           };
         };
     }
-    // flake-utils.lib.eachDefaultSystem
-      (system:
+    # Explicit: nixpkgs no longer evaluates x86_64-darwin, which
+    # eachDefaultSystem still lists.
+    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
+      system:
       let
         pkgs = import nixpkgs {
           overlays = [ self.overlays.default ];
           inherit system;
         };
-        buildDeps = with pkgs; [ git go_1_26 gnumake ];
-        devDeps = with pkgs;
+        buildDeps = with pkgs; [
+          git
+          go_latest
+          gnumake
+        ];
+        devDeps =
+          with pkgs;
           buildDeps
           ++ [
             golangci-lint
             golangci-lint-langserver
             golines
             prettier
-            nixpkgs-fmt
+            nixfmt
             goreleaser
             nfpm
             gotestsum
             gotests
             gofumpt
             gopls
+            gotools
+
+            gh
             ksh
             ko
             yq-go
@@ -163,17 +145,17 @@
             # roundtrip tests (TestAPIv2). Binaries: tofu, tscli.
             opentofu
             tscli
-            python314Packages.mdformat
-            python314Packages.mdformat-footnote
-            python314Packages.mdformat-frontmatter
-            python314Packages.mdformat-mkdocs
+            python3Packages.mdformat
+            python3Packages.mdformat-footnote
+            python3Packages.mdformat-frontmatter
+            python3Packages.mdformat-mkdocs
             prek
 
             # 'dot' is needed for pprof graphs
             # go tool pprof -http=: <source>
             graphviz
           ]
-          ++ lib.optionals pkgs.stdenv.isLinux [ traceroute ];
+          ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ traceroute ];
 
         # Add entry to build a docker image with headscale
         # caveat: only works on Linux
@@ -199,9 +181,13 @@
           pname = "headscale";
           version = headscaleVersion;
           vendorHash = (builtins.fromJSON (builtins.readFile ./flakehashes.json)).vendor.sri;
-          goPkg = pkgs.go_1_26;
+          goPkg = pkgs.go_latest;
           # //go:embed targets and test-read files outside the default whitelist.
-          embedDirs = [ ./hscontrol/assets ./hscontrol/db/schema.sql ./config-example.yaml ];
+          embedDirs = [
+            ./hscontrol/assets
+            ./hscontrol/db/schema.sql
+            ./config-example.yaml
+          ];
           extraSrc = [
             ./hscontrol/testdata
             ./hscontrol/types/testdata
@@ -218,49 +204,65 @@
           # from the test set but kept in source so cmd/hi and friends still
           # compile; TestPostgres* needs a server (the SQLite equivalents still
           # run). CGO off matches the build.
-          gotest = fc.goTest (common // {
-            testExclude = [ "/integration" "/hscontrol/servertest" ];
-            goSkip = [ "TestPostgres" ];
-            testEnv = "export CGO_ENABLED=0";
-          });
+          gotest = fc.goTest (
+            common
+            // {
+              testExclude = [
+                "/integration"
+                "/hscontrol/servertest"
+              ];
+              goSkip = [ "TestPostgres" ];
+              testEnv = "export CGO_ENABLED=0";
+            }
+          );
 
           # Full-tree golangci-lint (golines, gofumpt, etc.); uses the overlay's
           # golangci-lint built against the pinned Go.
           golangci-lint = fc.goLint common;
 
-          # nixpkgs-fmt + prettier, excluding generated output. goFmt = "off":
+          # nixfmt + prettier, excluding generated output. goFmt = "off":
           # Go formatting (golines, gofumpt) is enforced by the golangci-lint
           # check, not treefmt. prettierExts matches the old prettier-lint glob
           # (no json: testdata fixtures are hand-formatted).
-          formatting = fc.goFormat (common // {
-            goFmt = "off";
-            prettier = true;
-            prettierExts = [ "ts" "js" "md" "yaml" "yml" "sass" "css" "scss" "html" ];
-            # Mirror .prettierignore (docs/ are mkdocs-flavoured; gen/ generated).
-            fmtExclude = [ ./gen ./docs ];
-          });
+          formatting = fc.goFormat (
+            common
+            // {
+              goFmt = "off";
+              prettier = true;
+              prettierExts = [
+                "ts"
+                "js"
+                "md"
+                "yaml"
+                "yml"
+                "sass"
+                "css"
+                "scss"
+                "html"
+              ];
+              # Mirror .prettierignore (docs/ are mkdocs-flavoured; gen/ generated).
+              fmtExclude = [
+                ./gen
+                ./docs
+              ];
+            }
+          );
         };
       in
       {
         # `nix develop`
         devShells.default = pkgs.mkShell {
-          buildInputs =
-            devDeps
-            ++ [
-              (pkgs.writeShellScriptBin
-                "nix-vendor-sri"
-                ''
-                  set -eu
-                  exec go run ./cmd/vendorhash update "$@"
-                '')
+          buildInputs = devDeps ++ [
+            (pkgs.writeShellScriptBin "nix-vendor-sri" ''
+              set -eu
+              exec go run ./cmd/vendorhash update "$@"
+            '')
 
-              (pkgs.writeShellScriptBin
-                "go-mod-update-all"
-                ''
-                  cat go.mod | ${pkgs.ripgrep}/bin/rg "\t" | ${pkgs.ripgrep}/bin/rg -v indirect | ${pkgs.gawk}/bin/awk '{print $1}' | ${pkgs.findutils}/bin/xargs go get -u
-                  go mod tidy
-                '')
-            ];
+            (pkgs.writeShellScriptBin "go-mod-update-all" ''
+              cat go.mod | ${pkgs.ripgrep}/bin/rg "\t" | ${pkgs.ripgrep}/bin/rg -v '^\s*//' | ${pkgs.ripgrep}/bin/rg -v indirect | ${pkgs.gawk}/bin/awk '{print $1}' | ${pkgs.findutils}/bin/xargs go get -u
+              go mod tidy
+            '')
+          ];
 
           shellHook = ''
             export PATH="$PWD/result/bin:$PATH"
@@ -283,11 +285,25 @@
           drv = pkgs.headscale;
         };
 
-        checks = {
-          headscale = pkgs.testers.nixosTest (import ./nix/tests/headscale.nix);
-        }
-        # The Go build/test checks are gated to Linux: parts of the tree are
-        # Linux-specific and the pure unit subset is validated by CI.
-        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux goChecks;
-      });
+        # `nix fmt` is built from the same treefmt module as the formatting
+        # check, so the two cannot disagree. Every formatter the tree is judged
+        # by lives here, not in a hand-kept list of pre-commit hooks.
+        formatter = fc.formatter (
+          common
+          // {
+            goFmt = "off";
+            prettier = true;
+          }
+        );
+
+        # Gated to Linux: parts of the tree are Linux-specific, and the VM
+        # test needs KVM.
+        checks = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+          goChecks
+          // {
+            headscale = pkgs.testers.runNixOSTest (import ./nix/tests/headscale.nix self);
+          }
+        );
+      }
+    );
 }

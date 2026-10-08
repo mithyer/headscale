@@ -90,8 +90,8 @@ func TestIssue3212AutogroupInternetExitVisibility(t *testing.T) {
 					map[types.NodeID]struct{},
 					len(peerMap[srcNode.ID]),
 				)
-				for _, p := range peerMap[srcNode.ID] {
-					peerIDs[p.ID()] = struct{}{}
+				for _, id := range peerMap[srcNode.ID] {
+					peerIDs[id] = struct{}{}
 				}
 
 				for _, exitName := range exitNames {
@@ -148,7 +148,7 @@ func expectedExitPeerVisibility(
 		var seen []string
 
 		for _, peer := range capture.Netmap.Peers {
-			peerName := strings.Split(peer.Name(), ".")[0]
+			peerName, _, _ := strings.Cut(peer.Name(), ".")
 
 			if !exitAdvertisers[peerName] {
 				continue

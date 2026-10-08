@@ -3,6 +3,7 @@ package v2
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -16,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go4.org/netipx"
 	xmaps "golang.org/x/exp/maps"
-	"gorm.io/gorm"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 )
@@ -2359,12 +2359,12 @@ func p(pref string) Prefix        { return Prefix(mp(pref)) }
 
 func TestResolvePolicy(t *testing.T) {
 	users := map[string]types.User{
-		"testuser":   {Model: gorm.Model{ID: 1}, Name: "testuser"},
-		"groupuser":  {Model: gorm.Model{ID: 2}, Name: "groupuser"},
-		"groupuser1": {Model: gorm.Model{ID: 3}, Name: "groupuser1"},
-		"groupuser2": {Model: gorm.Model{ID: 4}, Name: "groupuser2"},
-		"notme":      {Model: gorm.Model{ID: 5}, Name: "notme"},
-		"testuser2":  {Model: gorm.Model{ID: 6}, Name: "testuser2"},
+		"testuser":   {ID: 1, Name: "testuser"},
+		"groupuser":  {ID: 2, Name: "groupuser"},
+		"groupuser1": {ID: 3, Name: "groupuser1"},
+		"groupuser2": {ID: 4, Name: "groupuser2"},
+		"notme":      {ID: 5, Name: "notme"},
+		"testuser2":  {ID: 6, Name: "testuser2"},
 	}
 
 	tests := []struct {
@@ -2476,7 +2476,7 @@ func TestResolvePolicy(t *testing.T) {
 				},
 				// not matching pak tag
 				{
-					AuthKey: &types.PreAuthKey{
+					AuthKey: &types.Credential{
 						Tags: []string{"tag:alsotagged"},
 					},
 					IPv4: ap("100.100.101.11"),
@@ -2584,6 +2584,7 @@ func TestResolvePolicy(t *testing.T) {
 			want:      util.TheInternet().Prefixes(),
 		},
 		{
+			// Unregistered users resolve to nothing, without an error (#3513).
 			name:      "invalid-username",
 			toResolve: new(Username("invaliduser@")),
 			nodes: types.Nodes{
@@ -2592,7 +2593,23 @@ func TestResolvePolicy(t *testing.T) {
 					IPv4: ap("100.100.101.103"),
 				},
 			},
-			wantErr: `user not found: token "invaliduser@"`,
+		},
+		{
+			// One unregistered member must not void the group (#3513).
+			name:      "group-with-unregistered-member",
+			toResolve: new(Group("group:testgroup")),
+			nodes: types.Nodes{
+				{
+					User: new(users["groupuser"]),
+					IPv4: ap("100.100.101.203"),
+				},
+			},
+			pol: &Policy{
+				Groups: Groups{
+					"group:testgroup": Usernames{"groupuser@", "invaliduser@"},
+				},
+			},
+			want: []netip.Prefix{mp("100.100.101.203/32")},
 		},
 		{
 			name:      "invalid-tag",
@@ -2808,9 +2825,9 @@ func TestResolvePolicy(t *testing.T) {
 
 func TestResolveAutoApprovers(t *testing.T) {
 	users := types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "user1"},
-		{Model: gorm.Model{ID: 2}, Name: "user2"},
-		{Model: gorm.Model{ID: 3}, Name: "user3"},
+		{ID: 1, Name: "user1"},
+		{ID: 2, Name: "user2"},
+		{ID: 3, Name: "user3"},
 	}
 
 	nodes := types.Nodes{
@@ -3274,9 +3291,9 @@ func ipSetComparer(x, y *netipx.IPSet) bool {
 
 func TestNodeCanApproveRoute(t *testing.T) {
 	users := types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "user1"},
-		{Model: gorm.Model{ID: 2}, Name: "user2"},
-		{Model: gorm.Model{ID: 3}, Name: "user3"},
+		{ID: 1, Name: "user1"},
+		{ID: 2, Name: "user2"},
+		{ID: 3, Name: "user3"},
 	}
 
 	nodes := types.Nodes{
@@ -3407,9 +3424,9 @@ func TestNodeCanApproveRoute(t *testing.T) {
 
 func TestResolveTagOwners(t *testing.T) {
 	users := types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "user1"},
-		{Model: gorm.Model{ID: 2}, Name: "user2"},
-		{Model: gorm.Model{ID: 3}, Name: "user3"},
+		{ID: 1, Name: "user1"},
+		{ID: 2, Name: "user2"},
+		{ID: 3, Name: "user3"},
 	}
 
 	nodes := types.Nodes{
@@ -3507,9 +3524,9 @@ func TestResolveTagOwners(t *testing.T) {
 
 func TestNodeCanHaveTag(t *testing.T) {
 	users := types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "user1"},
-		{Model: gorm.Model{ID: 2}, Name: "user2"},
-		{Model: gorm.Model{ID: 3}, Name: "user3"},
+		{ID: 1, Name: "user1"},
+		{ID: 2, Name: "user2"},
+		{ID: 3, Name: "user3"},
 	}
 
 	nodes := types.Nodes{
@@ -3786,9 +3803,9 @@ func TestNodeCanHaveTag(t *testing.T) {
 
 func TestUserMatchesOwner(t *testing.T) {
 	users := types.Users{
-		{Model: gorm.Model{ID: 1}, Name: "user1"},
-		{Model: gorm.Model{ID: 2}, Name: "user2"},
-		{Model: gorm.Model{ID: 3}, Name: "user3"},
+		{ID: 1, Name: "user1"},
+		{ID: 2, Name: "user2"},
+		{ID: 3, Name: "user3"},
 	}
 
 	tests := []struct {
@@ -4031,11 +4048,20 @@ func TestACL_UnmarshalJSON_WithCommentFields(t *testing.T) {
 		},
 	}
 
+	// The entry is validated as part of a whole policy, the only path that
+	// filters '#' members, so groups and tags used below must be declared.
+	const wrapper = `{
+		"groups": {"group:developers": ["user1@example.com"]},
+		"tagOwners": {
+			"tag:client": ["user1@example.com"],
+			"tag:server": ["user1@example.com"]
+		},
+		"acls": [%s]
+	}`
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var acl ACL
-
-			err := json.Unmarshal([]byte(tt.input), &acl)
+			pol, err := unmarshalPolicy(fmt.Appendf(nil, wrapper, tt.input))
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -4043,6 +4069,9 @@ func TestACL_UnmarshalJSON_WithCommentFields(t *testing.T) {
 			}
 
 			require.NoError(t, err)
+			require.Len(t, pol.ACLs, 1)
+
+			acl := pol.ACLs[0]
 			assert.Equal(t, tt.expected.Action, acl.Action)
 			assert.Equal(t, tt.expected.Protocol, acl.Protocol)
 			assert.Len(t, acl.Sources, len(tt.expected.Sources))
@@ -6264,6 +6293,127 @@ func TestValidateCapabilityName(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.ErrorIs(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestPolicyMetadataFields covers https://github.com/juanfont/headscale/issues/3479:
+// the '#'-prefixed metadata escape hatch added for headscale-admin lives in
+// [ACL.UnmarshalJSON] only, so every other policy object still hits
+// RejectUnknownMembers and rejects the same metadata.
+func TestPolicyMetadataFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  string
+		wantErr string
+		check   func(t *testing.T, pol *Policy)
+	}{
+		{
+			name: "acl",
+			policy: `{
+				"acls": [{
+					"#ha-meta": {"name": "web"},
+					"action": "accept",
+					"src": ["*"],
+					"dst": ["*:80"]
+				}]
+			}`,
+		},
+		{
+			name: "grant",
+			policy: `{
+				"grants": [{
+					"#ha-meta": {"name": "web"},
+					"src": ["*"],
+					"dst": ["*"],
+					"ip": ["tcp:80"]
+				}]
+			}`,
+		},
+		{
+			name: "ssh",
+			policy: `{
+				"ssh": [{
+					"#ha-meta": {"name": "admins"},
+					"action": "accept",
+					"src": ["user1@headscale.net"],
+					"dst": ["autogroup:self"],
+					"users": ["root"]
+				}]
+			}`,
+		},
+		{
+			name: "nodeattr",
+			policy: `{
+				"nodeAttrs": [{
+					"#ha-meta": {"name": "all"},
+					"target": ["*"],
+					"attr": ["randomize-client-port"]
+				}]
+			}`,
+		},
+		{
+			name: "toplevel",
+			policy: `{
+				"#ha-meta": {"version": 1},
+				"acls": [{"action": "accept", "src": ["*"], "dst": ["*:80"]}]
+			}`,
+		},
+		{
+			name: "metadata as last member, after a comment",
+			policy: `{
+				// a HuJSON comment
+				"acls": [{
+					"action": "accept",
+					"src": ["*"],
+					"dst": ["*:80"],
+					"#ha-meta": {"name": "web"}
+				}],
+				"#ha-meta": {"version": 1}
+			}`,
+		},
+		{
+			name: "unknown field is still rejected",
+			policy: `{
+				"acls": [{"action": "accept", "src": ["*"], "dst": ["*:80"], "protocol": "tcp"}]
+			}`,
+			wantErr: `unknown field: "protocol"`,
+		},
+		{
+			name: "app capability payload is left alone",
+			policy: `{
+				"grants": [{
+					"#ha-meta": {"name": "web"},
+					"src": ["*"],
+					"dst": ["*"],
+					"app": {"example.com/cap/web": [{"#note": "kept", "domain": ["example.com"]}]}
+				}]
+			}`,
+			check: func(t *testing.T, pol *Policy) {
+				t.Helper()
+
+				require.Len(t, pol.Grants, 1)
+				payload := pol.Grants[0].App["example.com/cap/web"]
+				require.Len(t, payload, 1)
+				assert.JSONEq(t, `{"#note": "kept", "domain": ["example.com"]}`, string(payload[0]))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pol, err := unmarshalPolicy([]byte(tt.policy))
+
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if tt.check != nil {
+				tt.check(t, pol)
 			}
 		})
 	}

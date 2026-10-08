@@ -3,6 +3,7 @@ package servertest_test
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/netmap"
 )
 
@@ -32,7 +34,7 @@ func reloadPolicy(t *testing.T, srv *servertest.TestServer, pol string) {
 }
 
 // hasCap reports whether the given netmap's self CapMap contains want.
-func hasCap(nm *netmap.NetworkMap, want tailcfg.NodeCapability) bool {
+func hasCap(nm *netmap.NetworkMap, want nodecap.Cap) bool {
 	if nm == nil || !nm.SelfNode.Valid() {
 		return false
 	}
@@ -82,11 +84,11 @@ func TestNodeAttrsDeliverToSelfAndPeer(t *testing.T) {
 
 	c1.WaitForCondition(t, "self randomize-client-port cap on c1", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrRandomizeClientPort)
+			return hasCap(nm, nodecap.RandomizeClientPort)
 		})
 	c2.WaitForCondition(t, "self randomize-client-port cap on c2", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrRandomizeClientPort)
+			return hasCap(nm, nodecap.RandomizeClientPort)
 		})
 
 	// randomize-client-port is not in the peer-consumed allowlist and
@@ -121,7 +123,7 @@ func TestNodeAttrsUserTargetIsolated(t *testing.T) {
 
 	a.WaitForCondition(t, "alice gains randomize-client-port", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrRandomizeClientPort)
+			return hasCap(nm, nodecap.RandomizeClientPort)
 		})
 
 	// bob must remain free of the cap; check after alice has converged so we
@@ -129,7 +131,7 @@ func TestNodeAttrsUserTargetIsolated(t *testing.T) {
 	b.WaitForPeers(t, 1, 10*time.Second)
 	nmB := b.Netmap()
 	require.NotNil(t, nmB)
-	assert.False(t, hasCap(nmB, tailcfg.NodeAttrRandomizeClientPort),
+	assert.False(t, hasCap(nmB, nodecap.RandomizeClientPort),
 		"bob is not in the target set; must not receive the cap")
 }
 
@@ -154,14 +156,14 @@ func TestNodeAttrsRevokesWhenRemoved(t *testing.T) {
 
 	c.WaitForCondition(t, "captive cap appears", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrDisableCaptivePortalDetection)
+			return hasCap(nm, nodecap.DisableCaptivePortalDetection)
 		})
 
 	reloadPolicy(t, srv, `{}`)
 
 	c.WaitForCondition(t, "captive cap disappears", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return !hasCap(nm, tailcfg.NodeAttrDisableCaptivePortalDetection)
+			return !hasCap(nm, nodecap.DisableCaptivePortalDetection)
 		})
 }
 
@@ -184,11 +186,11 @@ func TestNodeAttrsBaselineCapsAlwaysOn(t *testing.T) {
 				return false
 			}
 
-			for _, w := range []tailcfg.NodeCapability{
-				tailcfg.CapabilityAdmin,
-				tailcfg.CapabilitySSH,
-				tailcfg.CapabilityFileSharing,
-				tailcfg.NodeAttrDefaultAutoUpdate,
+			for _, w := range []nodecap.Cap{
+				nodecap.Admin,
+				nodecap.SSH,
+				nodecap.FileSharing,
+				nodecap.DefaultAutoUpdate,
 			} {
 				if !hasCap(nm, w) {
 					return false
@@ -217,9 +219,9 @@ func TestTaildropDisabledWithholdsFileSharingCap(t *testing.T) {
 				return false
 			}
 
-			return !hasCap(nm, tailcfg.CapabilityFileSharing) &&
-				hasCap(nm, tailcfg.CapabilityAdmin) &&
-				hasCap(nm, tailcfg.CapabilitySSH)
+			return !hasCap(nm, nodecap.FileSharing) &&
+				hasCap(nm, nodecap.Admin) &&
+				hasCap(nm, nodecap.SSH)
 		})
 }
 
@@ -247,9 +249,9 @@ func TestNodeAttrsAddsToBaseline(t *testing.T) {
 
 	c.WaitForCondition(t, "policy adds caps on top of baseline", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrRandomizeClientPort) &&
-				hasCap(nm, tailcfg.NodeAttrDisableCaptivePortalDetection) &&
-				hasCap(nm, tailcfg.CapabilitySSH)
+			return hasCap(nm, nodecap.RandomizeClientPort) &&
+				hasCap(nm, nodecap.DisableCaptivePortalDetection) &&
+				hasCap(nm, nodecap.SSH)
 		})
 }
 
@@ -276,7 +278,7 @@ func TestNodeAttrsReloadingSamePolicyDoesNotChurnSelf(t *testing.T) {
 
 	c.WaitForCondition(t, "policy cap arrives", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrRandomizeClientPort)
+			return hasCap(nm, nodecap.RandomizeClientPort)
 		})
 
 	// Reload identical bytes. Per-node CapMap diff produces an empty
@@ -288,7 +290,7 @@ func TestNodeAttrsReloadingSamePolicyDoesNotChurnSelf(t *testing.T) {
 
 	c.WaitForCondition(t, "cap persists after no-op reload", 5*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrRandomizeClientPort)
+			return hasCap(nm, nodecap.RandomizeClientPort)
 		})
 }
 
@@ -352,7 +354,7 @@ func TestNodeAttrsSuggestExitNodeOnPeerCapMap(t *testing.T) {
 	// usual stamp; nothing special about exit nodes here).
 	exit.WaitForCondition(t, "self suggest-exit-node on exit", 10*time.Second,
 		func(nm *netmap.NetworkMap) bool {
-			return hasCap(nm, tailcfg.NodeAttrSuggestExitNode)
+			return hasCap(nm, nodecap.SuggestExitNode)
 		})
 
 	// Peer-side: the viewer sees the exit node in its Peers list with
@@ -369,7 +371,7 @@ func TestNodeAttrsSuggestExitNodeOnPeerCapMap(t *testing.T) {
 					continue
 				}
 
-				return peer.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode)
+				return peer.CapMap().Contains(nodecap.SuggestExitNode)
 			}
 
 			return false
@@ -389,9 +391,169 @@ func TestNodeAttrsSuggestExitNodeOnPeerCapMap(t *testing.T) {
 					continue
 				}
 
-				return !peer.CapMap().Contains(tailcfg.NodeAttrSuggestExitNode)
+				return !peer.CapMap().Contains(nodecap.SuggestExitNode)
 			}
 
 			return false
 		})
+}
+
+// TestSuggestExitNodeDefaultOnPeerCapMap covers the SaaS default: an
+// approved exit node carries suggest-exit-node on its peer view with
+// no nodeAttrs grant, and loses it when approval is withdrawn. Apple
+// clients hide the exit-node list without it (issue #3415).
+func TestSuggestExitNodeDefaultOnPeerCapMap(t *testing.T) {
+	t.Parallel()
+
+	srv := servertest.NewServer(t)
+	user := srv.CreateUser(t, "sed-user")
+
+	exit := servertest.NewClient(t, srv, "sed-exit", servertest.WithUser(user))
+	viewer := servertest.NewClient(t, srv, "sed-viewer", servertest.WithUser(user))
+
+	exit.WaitForPeers(t, 1, 10*time.Second)
+	viewer.WaitForPeers(t, 1, 10*time.Second)
+
+	exitRoutes := []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/0"),
+		netip.MustParsePrefix("::/0"),
+	}
+
+	exit.Direct().SetHostinfo(&tailcfg.Hostinfo{
+		BackendLogID: "servertest-sed-exit",
+		Hostname:     "sed-exit",
+		RoutableIPs:  exitRoutes,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	require.NoError(t, exit.Direct().SendUpdate(ctx))
+	cancel()
+
+	peerHasCap := func(want bool) func(*netmap.NetworkMap) bool {
+		return func(nm *netmap.NetworkMap) bool {
+			if nm == nil {
+				return false
+			}
+
+			for _, peer := range nm.Peers {
+				if peer.ComputedName() == "sed-exit" {
+					return peer.CapMap().Contains(nodecap.SuggestExitNode) == want
+				}
+			}
+
+			return false
+		}
+	}
+
+	exitID := findNodeID(t, srv, "sed-exit")
+	_, ch, err := srv.State().SetApprovedRoutes(exitID, exitRoutes)
+	require.NoError(t, err)
+	srv.App.Change(ch)
+
+	viewer.WaitForCondition(t, "peer suggest-exit-node without nodeAttrs",
+		10*time.Second, peerHasCap(true))
+
+	// SaaS never stamps it on the exit node's own view.
+	require.False(t, hasCap(exit.Netmap(), nodecap.SuggestExitNode),
+		"suggest-exit-node must not appear on SelfNode by default")
+
+	_, ch, err = srv.State().SetApprovedRoutes(exitID, nil)
+	require.NoError(t, err)
+	srv.App.Change(ch)
+
+	viewer.WaitForCondition(t, "peer suggest-exit-node gone after unapprove",
+		10*time.Second, peerHasCap(false))
+}
+
+// firstResolver returns the address of the first DNS resolver in nm.
+func firstResolver(nm *netmap.NetworkMap) string {
+	if nm == nil || len(nm.DNS.Resolvers) == 0 {
+		return ""
+	}
+
+	return nm.DNS.Resolvers[0].Addr
+}
+
+// TestNodeAttrsNextDNS checks a node's DNS config follows each of its
+// inputs: the NextDNS profile from nodeAttrs, whether reached through a
+// policy reload or a tag change, and the device metadata from its Hostinfo.
+// Policy responses do not carry DNSConfig, so each must arrive on its own.
+func TestNodeAttrsNextDNS(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) (*servertest.TestServer, *servertest.TestClient) {
+		t.Helper()
+
+		srv := servertest.NewServer(t, servertest.WithDNSResolvers("https://dns.nextdns.io/base"))
+		user := srv.CreateUser(t, "nd-user")
+		c := servertest.NewClient(t, srv, "nd-node", servertest.WithUser(user))
+
+		c.WaitForCondition(t, "base resolver", 10*time.Second,
+			func(nm *netmap.NetworkMap) bool {
+				return strings.HasPrefix(firstResolver(nm), "https://dns.nextdns.io/base?")
+			})
+
+		return srv, c
+	}
+
+	waitResolver := func(t *testing.T, c *servertest.TestClient, prefix string) {
+		t.Helper()
+
+		c.WaitForCondition(t, "resolver "+prefix, 10*time.Second,
+			func(nm *netmap.NetworkMap) bool {
+				return strings.HasPrefix(firstResolver(nm), prefix)
+			})
+	}
+
+	t.Run("policy_reload", func(t *testing.T) {
+		t.Parallel()
+
+		srv, c := setup(t)
+
+		reloadPolicy(t, srv, `{
+			"acls":      [{"action": "accept", "src": ["*"], "dst": ["*:*"]}],
+			"nodeAttrs": [{"target": ["nd-user@"], "attr": ["nextdns:userprof"]}]
+		}`)
+
+		waitResolver(t, c, "https://dns.nextdns.io/userprof?")
+	})
+
+	t.Run("tag_change", func(t *testing.T) {
+		t.Parallel()
+
+		srv, c := setup(t)
+
+		reloadPolicy(t, srv, `{
+			"tagOwners": {"tag:dns": ["nd-user@"]},
+			"acls":      [{"action": "accept", "src": ["*"], "dst": ["*:*"]}],
+			"nodeAttrs": [{"target": ["tag:dns"], "attr": ["nextdns:tagprof"]}]
+		}`)
+
+		_, tagChange, err := srv.State().SetNodeTags(findNodeID(t, srv, "nd-node"), []string{"tag:dns"})
+		require.NoError(t, err)
+		srv.App.Change(tagChange)
+
+		waitResolver(t, c, "https://dns.nextdns.io/tagprof?")
+	})
+
+	t.Run("hostname_change", func(t *testing.T) {
+		t.Parallel()
+
+		_, c := setup(t)
+
+		c.Direct().SetHostinfo(&tailcfg.Hostinfo{
+			BackendLogID: "servertest-nd-node",
+			Hostname:     "nd-renamed",
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = c.Direct().SendUpdate(ctx)
+
+		c.WaitForCondition(t, "renamed device_name", 10*time.Second,
+			func(nm *netmap.NetworkMap) bool {
+				return strings.Contains(firstResolver(nm), "device_name=nd-renamed")
+			})
+	})
 }

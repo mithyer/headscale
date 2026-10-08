@@ -13,7 +13,6 @@ import (
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/must"
@@ -108,11 +107,11 @@ func TestTheInternet(t *testing.T) {
 
 func TestReduceFilterRules(t *testing.T) {
 	users := types.Users{
-		types.User{Model: gorm.Model{ID: 1}, Name: "mickael"},
-		types.User{Model: gorm.Model{ID: 2}, Name: "user1"},
-		types.User{Model: gorm.Model{ID: 3}, Name: "user2"},
-		types.User{Model: gorm.Model{ID: 4}, Name: "user100"},
-		types.User{Model: gorm.Model{ID: 5}, Name: "user3"},
+		types.User{ID: 1, Name: "mickael"},
+		types.User{ID: 2, Name: "user1"},
+		types.User{ID: 3, Name: "user2"},
+		types.User{ID: 4, Name: "user100"},
+		types.User{ID: 5, Name: "user3"},
 	}
 
 	tests := []struct {
@@ -882,6 +881,66 @@ func TestReduceFilterRulesPartialApproval(t *testing.T) {
 					DstPorts: []tailcfg.NetPortRange{
 						// Not advertised, not approved
 						{IP: "192.168.0.0/16", Ports: tailcfg.PortRangeAny},
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			// Tailscale SaaS delivers every rule to an approved exit
+			// node: its exit routes contain every destination.
+			name: "approved-exit-route-includes-tailnet-host",
+			node: &types.Node{
+				IPv4:     ap("100.64.0.1"),
+				IPv6:     ap("fd7a:115c:a1e0::1"),
+				Hostinfo: &tailcfg.Hostinfo{RoutableIPs: tsaddr.ExitRoutes()},
+
+				ApprovedRoutes: tsaddr.ExitRoutes(),
+			},
+			rules: []tailcfg.FilterRule{
+				{
+					SrcIPs: []string{"100.64.0.17"},
+					DstPorts: []tailcfg.NetPortRange{
+						{IP: "100.64.0.16", Ports: tailcfg.PortRange{First: 53, Last: 53}},
+						{IP: "fd7a:115c:a1e0::10", Ports: tailcfg.PortRange{First: 53, Last: 53}},
+					},
+				},
+			},
+			wantCount:  1,
+			wantRoutes: []string{"100.64.0.16", "fd7a:115c:a1e0::10"},
+		},
+		{
+			name: "approved-exit-route-includes-private-subnet",
+			node: &types.Node{
+				IPv4:     ap("100.64.0.1"),
+				IPv6:     ap("fd7a:115c:a1e0::1"),
+				Hostinfo: &tailcfg.Hostinfo{RoutableIPs: tsaddr.ExitRoutes()},
+
+				ApprovedRoutes: tsaddr.ExitRoutes(),
+			},
+			rules: []tailcfg.FilterRule{
+				{
+					SrcIPs: []string{"100.64.0.17"},
+					DstPorts: []tailcfg.NetPortRange{
+						{IP: "10.33.0.0/16", Ports: tailcfg.PortRangeAny},
+					},
+				},
+			},
+			wantCount:  1,
+			wantRoutes: []string{"10.33.0.0/16"},
+		},
+		{
+			name: "unapproved-exit-route-excluded",
+			node: &types.Node{
+				IPv4:     ap("100.64.0.1"),
+				IPv6:     ap("fd7a:115c:a1e0::1"),
+				Hostinfo: &tailcfg.Hostinfo{RoutableIPs: tsaddr.ExitRoutes()},
+			},
+			rules: []tailcfg.FilterRule{
+				{
+					SrcIPs: []string{"100.64.0.17"},
+					DstPorts: []tailcfg.NetPortRange{
+						{IP: "100.64.0.16", Ports: tailcfg.PortRangeAny},
 					},
 				},
 			},
